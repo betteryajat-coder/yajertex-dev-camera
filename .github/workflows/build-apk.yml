@@ -43,6 +43,21 @@ jobs:
           cp android-patches/AndroidManifest.xml \
              android/app/src/main/AndroidManifest.xml
 
+      # The scaffolded project pins Kotlin too low for newer plugins
+      # (e.g. camera). Bump to 1.9.22.
+      - name: Bump Kotlin plugin version
+        run: |
+          if [ -f android/settings.gradle ]; then
+            sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/' android/settings.gradle || true
+          fi
+          if [ -f android/build.gradle ]; then
+            sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/" android/build.gradle || true
+          fi
+          echo '--- settings.gradle ---'
+          grep -i kotlin android/settings.gradle || true
+          echo '--- build.gradle ---'
+          grep -i kotlin android/build.gradle || true
+
       - name: Pub get
         run: flutter pub get
 
