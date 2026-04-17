@@ -145,32 +145,50 @@ class _CameraScreenState extends State<CameraScreen>
     } catch (_) {/* swallow — already disposed etc. */}
 
     // 2) Give the native camera pipeline a breath to release hardware.
-    await Future.delayed(const Duration(milliseconds: 180));
+    await Future.delayed(const Duration(milliseconds: 250));
 
-    // 3) Bring up the new controller.
-    final newController = CameraController(
-      desc,
+    // 3) Bring up the new controller. Some Android devices reject
+    //    ResolutionPreset.high on the back sensor (especially on low-end
+    //    phones). Fall through a ladder until one works.
+    CameraController? newController;
+    Object? lastErr;
+    for (final preset in const [
       ResolutionPreset.high,
-      enableAudio: false,
-      imageFormatGroup: Platform.isIOS
-          ? ImageFormatGroup.bgra8888
-          : ImageFormatGroup.jpeg,
-    );
-
-    try {
-      await newController.initialize();
+      ResolutionPreset.medium,
+      ResolutionPreset.low,
+    ]) {
+      final candidate = CameraController(
+        desc,
+        preset,
+        enableAudio: false,
+        imageFormatGroup: Platform.isIOS
+            ? ImageFormatGroup.bgra8888
+            : ImageFormatGroup.jpeg,
+      );
       try {
-        await newController.setFlashMode(FlashMode.off);
-      } catch (_) {/* not all devices expose flash on front cam */}
-    } catch (e) {
-      await newController.dispose();
+        await candidate.initialize();
+        try {
+          await candidate.setFlashMode(FlashMode.off);
+        } catch (_) {/* front cams often lack flash */}
+        newController = candidate;
+        break;
+      } catch (e) {
+        lastErr = e;
+        try {
+          await candidate.dispose();
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 120));
+      }
+    }
+
+    if (newController == null) {
       if (!mounted) {
         _switching = false;
         return;
       }
       setState(() {
         _initializing = false;
-        _error = 'Camera failed to start: $e';
+        _error = 'This camera failed to start: $lastErr';
       });
       _switching = false;
       return;

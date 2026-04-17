@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../models/photo_model.dart';
 import '../services/storage_service.dart';
@@ -18,6 +19,29 @@ class PhotoDetailScreen extends StatefulWidget {
 
 class _PhotoDetailScreenState extends State<PhotoDetailScreen> {
   final _storage = StorageService();
+
+  Future<void> _share() async {
+    final p = widget.photo;
+    final parts = <String>[];
+    if (p.societyName.trim().isNotEmpty) parts.add('📍 ${p.societyName}');
+    if (p.latitude != null && p.longitude != null) {
+      parts.add(
+          'Lat: ${p.latitude!.toStringAsFixed(6)}, Lng: ${p.longitude!.toStringAsFixed(6)}');
+    }
+    parts.add(_formatTs(p.timestamp));
+    try {
+      await Share.shareXFiles(
+        [XFile(p.path)],
+        text: parts.join('\n'),
+        subject: p.societyName.isEmpty ? 'Geo-tagged photo' : p.societyName,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to share: $e')),
+      );
+    }
+  }
 
   Future<void> _confirmDelete() async {
     final ok = await showDialog<bool>(
@@ -72,6 +96,11 @@ class _PhotoDetailScreenState extends State<PhotoDetailScreen> {
                         color: Colors.white),
                   ),
                   const Spacer(),
+                  IconButton(
+                    onPressed: _share,
+                    icon: const Icon(Icons.share_rounded,
+                        color: Colors.white),
+                  ),
                   IconButton(
                     onPressed: _confirmDelete,
                     icon: const Icon(Icons.delete_outline_rounded,

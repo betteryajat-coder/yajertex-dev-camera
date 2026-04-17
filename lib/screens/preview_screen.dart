@@ -261,11 +261,14 @@ class _PreviewScreenState extends State<PreviewScreen> {
   }
 
   Widget _buildSocietyField() {
+    // Solid dark background (not white-alpha over black) — avoids the
+    // "whole area turns white" bug when the field receives focus and the
+    // system autofill overlay was painting white-on-white.
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.07),
+        color: const Color(0xFF1A1F26),
         borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(color: Colors.white.withOpacity(0.18)),
+        border: Border.all(color: Colors.white.withOpacity(0.22)),
       ),
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
       child: Column(
@@ -288,18 +291,24 @@ class _PreviewScreenState extends State<PreviewScreen> {
               const Spacer(),
               if (widget.suggestedSocietyName.isNotEmpty)
                 Text(
-                  'auto-filled',
+                  'auto-filled · tap to edit',
                   style: GoogleFonts.inter(
-                    color: Colors.white38,
+                    color: Colors.white54,
                     fontSize: 10,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
             ],
           ),
+          const SizedBox(height: 4),
           TextField(
             controller: _societyCtrl,
             textCapitalization: TextCapitalization.words,
+            autocorrect: false,
+            enableSuggestions: false,
+            autofillHints: const <String>[],
+            keyboardType: TextInputType.text,
+            keyboardAppearance: Brightness.dark,
             style: GoogleFonts.inter(
               color: Colors.white,
               fontSize: 15,
@@ -312,11 +321,24 @@ class _PreviewScreenState extends State<PreviewScreen> {
                 color: Colors.white38,
                 fontSize: 14,
               ),
+              filled: true,
+              fillColor: Colors.black.withOpacity(0.35),
               isDense: true,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              contentPadding: const EdgeInsets.symmetric(vertical: 8),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.18)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.18)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide:
+                    const BorderSide(color: AppTheme.primary, width: 1.4),
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),
           ),
         ],
