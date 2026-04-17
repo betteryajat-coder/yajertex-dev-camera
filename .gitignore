@@ -18,17 +18,8 @@ pubspec.lock
 .flutter-plugins
 .flutter-plugins-dependencies
 
-# Android
-android/.gradle/
-android/captures/
-android/gradlew
-android/gradlew.bat
-android/local.properties
-android/**/GeneratedPluginRegistrant.java
-android/key.properties
-android/app/debug
-android/app/profile
-android/app/release
+# Android — scaffolded on CI by `flutter create`; custom overlays live in android-patches/
+android/
 
 # iOS
 ios/Flutter/Flutter.framework

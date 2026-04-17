@@ -27,6 +27,22 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
+      # Scaffold the Android project skeleton (gradle wrapper, MainActivity,
+      # build.gradle, etc.). Existing Dart source is left untouched.
+      - name: Scaffold Android project
+        run: |
+          flutter create --project-name yajertex_dev_camera \
+                         --org com.yajertex \
+                         --platforms=android \
+                         .
+
+      # Overlay our custom AndroidManifest.xml (adds camera + location
+      # permissions that flutter create doesn't include by default).
+      - name: Apply custom AndroidManifest
+        run: |
+          cp android-patches/AndroidManifest.xml \
+             android/app/src/main/AndroidManifest.xml
+
       - name: Pub get
         run: flutter pub get
 
