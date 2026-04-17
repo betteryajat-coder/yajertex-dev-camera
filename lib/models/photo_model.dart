@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-/// Serializable metadata for a captured photo.
+/// Serialisable metadata for a captured photo.
 class PhotoModel {
   final String id;
   final String path;
@@ -8,6 +8,7 @@ class PhotoModel {
   final double? longitude;
   final DateTime timestamp;
   final String userName;
+  final String societyName;
 
   const PhotoModel({
     required this.id,
@@ -16,15 +17,17 @@ class PhotoModel {
     required this.longitude,
     required this.timestamp,
     required this.userName,
+    required this.societyName,
   });
 
-  PhotoModel copyWith({String? path}) => PhotoModel(
+  PhotoModel copyWith({String? path, String? societyName}) => PhotoModel(
         id: id,
         path: path ?? this.path,
         latitude: latitude,
         longitude: longitude,
         timestamp: timestamp,
         userName: userName,
+        societyName: societyName ?? this.societyName,
       );
 
   Map<String, dynamic> toJson() => {
@@ -34,6 +37,7 @@ class PhotoModel {
         'longitude': longitude,
         'timestamp': timestamp.toIso8601String(),
         'userName': userName,
+        'societyName': societyName,
       };
 
   factory PhotoModel.fromJson(Map<String, dynamic> json) => PhotoModel(
@@ -43,6 +47,7 @@ class PhotoModel {
         longitude: (json['longitude'] as num?)?.toDouble(),
         timestamp: DateTime.parse(json['timestamp'] as String),
         userName: json['userName'] as String? ?? '',
+        societyName: json['societyName'] as String? ?? '',
       );
 
   static String encodeList(List<PhotoModel> items) =>

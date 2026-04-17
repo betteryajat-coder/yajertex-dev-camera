@@ -65,9 +65,9 @@ class _SplashScreenState extends State<SplashScreen> {
                     .fadeIn(duration: 500.ms),
                 const SizedBox(height: 36),
                 Text(
-                  'YajerTex Dev Camera',
+                  'YajatXDev Geo',
                   style: GoogleFonts.inter(
-                    fontSize: 26,
+                    fontSize: 28,
                     fontWeight: FontWeight.w700,
                     color: AppTheme.ink,
                     letterSpacing: -0.4,

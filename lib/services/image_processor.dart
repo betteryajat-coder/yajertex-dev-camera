@@ -2,24 +2,29 @@ import 'dart:io';
 
 import 'package:image/image.dart' as img;
 
-/// Utilities for stamping GPS coordinates onto captured frames and for
+/// Utilities for stamping the geo-overlay onto captured frames and for
 /// rotating saved images 90 degrees at a time.
 class ImageProcessor {
-  /// Burns a small, readable lat/lon badge into the bottom-left corner of
-  /// [srcPath] and writes the result to [dstPath]. Returns [dstPath].
+  /// Burns the overlay badge into the bottom-left corner of [srcPath]
+  /// and writes the result to [dstPath]. Returns [dstPath].
+  ///
+  /// Format (top → bottom):
+  ///   1. Society / area name (if provided)
+  ///   2. Lat: XX.XXXXXX
+  ///   3. Lng: XX.XXXXXX
+  ///   4. 17 Apr 2026, 5:42 PM
   static Future<String> stampGeoOverlay({
     required String srcPath,
     required String dstPath,
     required double? latitude,
     required double? longitude,
-    required String userName,
+    required String societyName,
     required DateTime timestamp,
     bool mirror = false,
   }) async {
     final bytes = await File(srcPath).readAsBytes();
     var decoded = img.decodeImage(bytes);
     if (decoded == null) {
-      // If we can't decode, just copy the original to the destination.
       await File(srcPath).copy(dstPath);
       return dstPath;
     }
@@ -34,27 +39,34 @@ class ImageProcessor {
 
     // Scale text size relative to image width so it's legible on any device.
     final baseFontSize = (w / 55).clamp(18.0, 48.0);
-    final font = _pickFont(baseFontSize);
+    final titleFont = _pickFont(baseFontSize * 1.15);
+    final bodyFont = _pickFont(baseFontSize);
 
     final lat = latitude?.toStringAsFixed(6) ?? '—';
-    final lon = longitude?.toStringAsFixed(6) ?? '—';
-    final ts = _formatTs(timestamp);
-    final lines = <String>[
-      'YajerTex Dev Camera',
+    final lng = longitude?.toStringAsFixed(6) ?? '—';
+    final dt = _formatDateTime(timestamp);
+
+    final hasSociety = societyName.trim().isNotEmpty;
+    final titleLine = hasSociety ? societyName.trim() : null;
+    final bodyLines = <String>[
       'Lat: $lat',
-      'Lon: $lon',
-      '$ts  •  $userName',
+      'Lng: $lng',
+      dt,
     ];
 
-    // Opaque translucent panel behind the text.
-    final padding = (w * 0.018).round();
-    final lineHeight = font.lineHeight + 4;
-    final panelH = lines.length * lineHeight + padding * 2;
-    final panelW = (w * 0.55).round();
+    // Measure approximate panel size.
+    final padding = (w * 0.02).round();
+    final titleLineH = titleFont.lineHeight + 6;
+    final bodyLineH = bodyFont.lineHeight + 4;
+    final totalLinesH =
+        (titleLine != null ? titleLineH : 0) + bodyLines.length * bodyLineH;
+    final panelH = totalLinesH + padding * 2;
+    final panelW = (w * 0.58).round();
 
     final left = padding;
     final top = h - panelH - padding;
 
+    // Translucent panel.
     img.fillRect(
       decoded,
       x1: left,
@@ -64,7 +76,7 @@ class ImageProcessor {
       color: img.ColorRgba8(0, 20, 40, 140),
     );
 
-    // Thin blue accent line on the left edge.
+    // Thin blue accent on the left edge.
     img.fillRect(
       decoded,
       x1: left,
@@ -74,25 +86,41 @@ class ImageProcessor {
       color: img.ColorRgba8(61, 169, 252, 255),
     );
 
-    // Subtle drop-shadow for the text, then the bright foreground.
-    for (var i = 0; i < lines.length; i++) {
-      final y = top + padding + i * lineHeight;
-      img.drawString(
+    var cursorY = top + padding;
+
+    // Title (society name) — larger, bold-feeling (rendered twice for weight).
+    if (titleLine != null) {
+      _drawTextWithShadow(
         decoded,
-        lines[i],
-        font: font,
-        x: left + padding + 9,
-        y: y + 2,
-        color: img.ColorRgba8(0, 0, 0, 180),
-      );
-      img.drawString(
-        decoded,
-        lines[i],
-        font: font,
+        text: titleLine,
+        font: titleFont,
         x: left + padding + 8,
-        y: y,
-        color: img.ColorRgba8(245, 250, 255, 255),
+        y: cursorY,
+        fgColor: img.ColorRgba8(255, 255, 255, 255),
       );
+      // Extra overlay pass for faux-bold weight.
+      img.drawString(
+        decoded,
+        titleLine,
+        font: titleFont,
+        x: left + padding + 9,
+        y: cursorY,
+        color: img.ColorRgba8(255, 255, 255, 255),
+      );
+      cursorY += titleLineH;
+    }
+
+    // Body lines.
+    for (final line in bodyLines) {
+      _drawTextWithShadow(
+        decoded,
+        text: line,
+        font: bodyFont,
+        x: left + padding + 8,
+        y: cursorY,
+        fgColor: img.ColorRgba8(235, 245, 255, 255),
+      );
+      cursorY += bodyLineH;
     }
 
     final out = img.encodeJpg(decoded, quality: 92);
@@ -111,15 +139,48 @@ class ImageProcessor {
     await File(path).writeAsBytes(out, flush: true);
   }
 
+  static void _drawTextWithShadow(
+    img.Image target, {
+    required String text,
+    required img.BitmapFont font,
+    required int x,
+    required int y,
+    required img.Color fgColor,
+  }) {
+    // Soft drop-shadow for legibility on bright backgrounds.
+    img.drawString(
+      target,
+      text,
+      font: font,
+      x: x + 1,
+      y: y + 2,
+      color: img.ColorRgba8(0, 0, 0, 200),
+    );
+    img.drawString(
+      target,
+      text,
+      font: font,
+      x: x,
+      y: y,
+      color: fgColor,
+    );
+  }
+
   static img.BitmapFont _pickFont(double size) {
     if (size >= 44) return img.arial48;
     if (size >= 30) return img.arial24;
     return img.arial14;
   }
 
-  static String _formatTs(DateTime t) {
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${t.year}-${two(t.month)}-${two(t.day)} '
-        '${two(t.hour)}:${two(t.minute)}';
+  static String _formatDateTime(DateTime t) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final hour24 = t.hour;
+    final h12 = hour24 == 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24);
+    final suffix = hour24 >= 12 ? 'PM' : 'AM';
+    final mm = t.minute.toString().padLeft(2, '0');
+    return '${t.day} ${months[t.month - 1]} ${t.year}, $h12:$mm $suffix';
   }
 }

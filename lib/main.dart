@@ -20,16 +20,16 @@ void main() async {
     ),
   );
 
-  runApp(const YajerTexApp());
+  runApp(const YajatXDevGeoApp());
 }
 
-class YajerTexApp extends StatelessWidget {
-  const YajerTexApp({super.key});
+class YajatXDevGeoApp extends StatelessWidget {
+  const YajatXDevGeoApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'YajerTex Dev Camera',
+      title: 'YajatXDev Geo',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       home: const SplashScreen(),

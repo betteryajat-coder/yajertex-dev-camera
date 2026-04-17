@@ -120,7 +120,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'YajerTex Dev Camera',
+                        'YajatXDev Geo',
                         style: GoogleFonts.inter(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
@@ -327,10 +327,14 @@ class _PhotoTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      date,
+                      photo.societyName.isEmpty
+                          ? date
+                          : photo.societyName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.inter(
                         fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
                         color: AppTheme.ink,
                       ),
                     ),
@@ -340,14 +344,17 @@ class _PhotoTile extends StatelessWidget {
                         const Icon(Icons.schedule_rounded,
                             size: 12, color: AppTheme.subInk),
                         const SizedBox(width: 4),
-                        Text(
-                          time,
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            color: AppTheme.subInk,
+                        Expanded(
+                          child: Text(
+                            '$date · $time',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              color: AppTheme.subInk,
+                            ),
                           ),
                         ),
-                        const Spacer(),
                         Icon(
                           Icons.location_on_rounded,
                           size: 12,

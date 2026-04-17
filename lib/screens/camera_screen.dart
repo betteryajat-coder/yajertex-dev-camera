@@ -5,8 +5,8 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:path/path.dart' as p;
 
-import '../services/image_processor.dart';
 import '../services/location_service.dart';
 import '../services/permissions_service.dart';
 import '../services/storage_service.dart';
@@ -15,7 +15,14 @@ import '../widgets/glass_card.dart';
 import 'preview_screen.dart';
 
 /// Live camera with front/back toggle, animated shutter, and inline
-/// GPS + permission status. Captures then hands off to the preview.
+/// GPS + permission status.
+///
+/// Camera flip correctness (the bug fix):
+///   1. Set loading state + drop the CameraPreview immediately.
+///   2. Fully dispose the previous controller and wait.
+///   3. Let the platform release the camera device (~150ms).
+///   4. Create + initialise the new controller.
+///   5. Only swap `_controller` in once the new one is initialised.
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
@@ -31,8 +38,9 @@ class _CameraScreenState extends State<CameraScreen>
 
   List<CameraDescription> _cameras = [];
   CameraController? _controller;
-  int _activeCameraIndex = 0;
+  CameraLensDirection _activeLens = CameraLensDirection.front;
   bool _initializing = true;
+  bool _switching = false;
   bool _capturing = false;
   String? _error;
 
@@ -62,6 +70,7 @@ class _CameraScreenState extends State<CameraScreen>
     if (c == null || !c.value.isInitialized) return;
     if (state == AppLifecycleState.inactive) {
       c.dispose();
+      _controller = null;
     } else if (state == AppLifecycleState.resumed) {
       _bootstrap();
     }
@@ -94,13 +103,12 @@ class _CameraScreenState extends State<CameraScreen>
         return;
       }
 
-      // Default to front camera per spec.
-      final frontIdx = _cameras.indexWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
-      );
-      _activeCameraIndex = frontIdx >= 0 ? frontIdx : 0;
+      // Default to front per spec; fall back to whatever exists.
+      final front = _firstOfLens(CameraLensDirection.front);
+      final initial = front ?? _cameras.first;
+      _activeLens = initial.lensDirection;
 
-      await _initController(_cameras[_activeCameraIndex]);
+      await _switchTo(initial);
     } catch (e) {
       setState(() {
         _initializing = false;
@@ -109,37 +117,112 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  Future<void> _initController(CameraDescription desc) async {
-    final old = _controller;
-    final controller = CameraController(
-      desc,
-      ResolutionPreset.high,
-      enableAudio: false,
-      imageFormatGroup: Platform.isIOS
-          ? ImageFormatGroup.bgra8888
-          : ImageFormatGroup.jpeg,
-    );
-    _controller = controller;
-    try {
-      await controller.initialize();
-      await controller.setFlashMode(FlashMode.off);
-    } catch (e) {
-      setState(() {
-        _initializing = false;
-        _error = 'Camera failed to start: $e';
-      });
-      return;
+  CameraDescription? _firstOfLens(CameraLensDirection lens) {
+    for (final c in _cameras) {
+      if (c.lensDirection == lens) return c;
     }
-    await old?.dispose();
-    if (!mounted) return;
-    setState(() => _initializing = false);
+    return null;
   }
 
-  Future<void> _toggleCamera() async {
-    if (_cameras.length < 2 || _controller == null) return;
-    setState(() => _initializing = true);
-    _activeCameraIndex = (_activeCameraIndex + 1) % _cameras.length;
-    await _initController(_cameras[_activeCameraIndex]);
+  /// Cleanly switches to a given camera description.
+  /// Safe to call repeatedly; re-entrant calls are ignored via [_switching].
+  Future<void> _switchTo(CameraDescription desc) async {
+    if (_switching) return;
+    _switching = true;
+
+    // 1) Tear down UI + old controller first so nothing tries to render
+    //    a disposed controller.
+    final old = _controller;
+    if (mounted) {
+      setState(() {
+        _controller = null;
+        _initializing = true;
+        _error = null;
+      });
+    }
+    try {
+      await old?.dispose();
+    } catch (_) {/* swallow — already disposed etc. */}
+
+    // 2) Give the native camera pipeline a breath to release hardware.
+    await Future.delayed(const Duration(milliseconds: 250));
+
+    // 3) Bring up the new controller. Some Android devices reject
+    //    ResolutionPreset.high on the back sensor (especially on low-end
+    //    phones). Fall through a ladder until one works.
+    CameraController? newController;
+    Object? lastErr;
+    for (final preset in const [
+      ResolutionPreset.high,
+      ResolutionPreset.medium,
+      ResolutionPreset.low,
+    ]) {
+      final candidate = CameraController(
+        desc,
+        preset,
+        enableAudio: false,
+        imageFormatGroup: Platform.isIOS
+            ? ImageFormatGroup.bgra8888
+            : ImageFormatGroup.jpeg,
+      );
+      try {
+        await candidate.initialize();
+        try {
+          await candidate.setFlashMode(FlashMode.off);
+        } catch (_) {/* front cams often lack flash */}
+        newController = candidate;
+        break;
+      } catch (e) {
+        lastErr = e;
+        try {
+          await candidate.dispose();
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 120));
+      }
+    }
+
+    if (newController == null) {
+      if (!mounted) {
+        _switching = false;
+        return;
+      }
+      setState(() {
+        _initializing = false;
+        _error = 'This camera failed to start: $lastErr';
+      });
+      _switching = false;
+      return;
+    }
+
+    if (!mounted) {
+      await newController.dispose();
+      _switching = false;
+      return;
+    }
+
+    setState(() {
+      _controller = newController;
+      _activeLens = desc.lensDirection;
+      _initializing = false;
+    });
+    _switching = false;
+  }
+
+  /// Rotates through front ↔ back (or through all cameras if more exist).
+  Future<void> _flipCamera() async {
+    if (_cameras.length < 2 || _switching) return;
+
+    // Prefer toggling between front and back rather than a simple index++,
+    // so devices with 3+ sensors still flip predictably.
+    final target = _activeLens == CameraLensDirection.front
+        ? _firstOfLens(CameraLensDirection.back)
+        : _firstOfLens(CameraLensDirection.front);
+
+    final next = target ??
+        _cameras[(_cameras.indexOf(_controller!.description) + 1) %
+            _cameras.length];
+
+    await _switchTo(next);
   }
 
   Future<void> _capture() async {
@@ -147,30 +230,33 @@ class _CameraScreenState extends State<CameraScreen>
     if (c == null || !c.value.isInitialized || _capturing) return;
 
     setState(() => _capturing = true);
-    unawaited(_shutterAnim.forward(from: 0).then((_) => _shutterAnim.reverse()));
+    unawaited(
+        _shutterAnim.forward(from: 0).then((_) => _shutterAnim.reverse()));
 
+    XFile? shot;
     try {
-      final shot = await c.takePicture();
-      final loc = await _location.getCurrentLocation();
-      final name = (await _storage.getUserName()) ?? 'User';
+      shot = await c.takePicture();
 
-      final destPath = await _storage.newPhotoPath();
-      final isFront = c.description.lensDirection == CameraLensDirection.front;
-
-      await ImageProcessor.stampGeoOverlay(
-        srcPath: shot.path,
-        dstPath: destPath,
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        userName: name,
-        timestamp: DateTime.now(),
-        mirror: isFront,
+      // Copy the plugin's temp capture into our app's captures dir
+      // as a *raw* file — the overlay is stamped on save (after any edit
+      // of the society name).
+      final rawDir = await _storage.photoDirectory();
+      final rawPath = p.join(
+        rawDir.path,
+        'raw_${DateTime.now().microsecondsSinceEpoch}.jpg',
       );
-
-      // Clean up the camera plugin's temp file.
+      await File(shot.path).copy(rawPath);
       try {
         await File(shot.path).delete();
       } catch (_) {}
+
+      // Read GPS + do best-effort reverse geocoding in parallel with UI.
+      final loc = await _location.getCurrentLocation();
+      String? societyName;
+      if (loc.ok) {
+        societyName =
+            await _location.resolveLocationName(loc.latitude!, loc.longitude!);
+      }
 
       if (!mounted) return;
 
@@ -183,14 +269,17 @@ class _CameraScreenState extends State<CameraScreen>
         );
       }
 
+      final isFront = c.description.lensDirection == CameraLensDirection.front;
+
       final saved = await Navigator.of(context).push<bool>(
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 350),
           pageBuilder: (_, __, ___) => PreviewScreen(
-            imagePath: destPath,
+            rawImagePath: rawPath,
             latitude: loc.latitude,
             longitude: loc.longitude,
-            userName: name,
+            suggestedSocietyName: societyName ?? '',
+            mirrorOnSave: isFront,
           ),
           transitionsBuilder: (_, a, __, child) =>
               FadeTransition(opacity: a, child: child),
@@ -247,7 +336,6 @@ class _CameraScreenState extends State<CameraScreen>
     return LayoutBuilder(
       builder: (context, box) {
         final size = c.value.previewSize!;
-        // previewSize is in sensor orientation (width = long side).
         final aspect = size.height / size.width;
         return FittedBox(
           fit: BoxFit.cover,
@@ -305,6 +393,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Widget _buildTopBar() {
+    final hasMultiCam = _cameras.length > 1;
     return Positioned(
       top: 0,
       left: 0,
@@ -337,7 +426,9 @@ class _CameraScreenState extends State<CameraScreen>
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      'GPS Stamp ON',
+                      _activeLens == CameraLensDirection.front
+                          ? 'Front • Geo ON'
+                          : 'Back • Geo ON',
                       style: GoogleFonts.inter(
                         color: Colors.white,
                         fontSize: 12,
@@ -350,7 +441,7 @@ class _CameraScreenState extends State<CameraScreen>
               const Spacer(),
               _circleIcon(
                 icon: Icons.flip_camera_ios_rounded,
-                onTap: _cameras.length > 1 ? _toggleCamera : null,
+                onTap: hasMultiCam && !_switching ? _flipCamera : null,
               ),
             ],
           ),
@@ -360,6 +451,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Widget _buildBottomControls() {
+    final hasMultiCam = _cameras.length > 1;
     return Positioned(
       bottom: 0,
       left: 0,
@@ -388,12 +480,16 @@ class _CameraScreenState extends State<CameraScreen>
               ),
               _ShutterButton(
                 loading: _capturing,
-                onTap: _initializing || _error != null ? null : _capture,
+                onTap: _initializing || _error != null || _switching
+                    ? null
+                    : _capture,
               ),
               _sideAction(
                 icon: Icons.cameraswitch_rounded,
-                label: 'Flip',
-                onTap: _cameras.length > 1 ? _toggleCamera : null,
+                label: _activeLens == CameraLensDirection.front
+                    ? 'Back'
+                    : 'Front',
+                onTap: hasMultiCam && !_switching ? _flipCamera : null,
               ),
             ],
           ),
