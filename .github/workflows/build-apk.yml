@@ -3,6 +3,8 @@ name: Build APK
 on:
   push:
     branches: [main, master]
+  pull_request:
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -27,24 +29,32 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
+      # Rasterize the brand SVG to a 1024x1024 PNG for flutter_launcher_icons.
+      - name: Install rsvg-convert
+        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin
+
+      - name: Convert logo SVG to PNG
+        run: |
+          rsvg-convert -w 1024 -h 1024 assets/icon/icon.svg -o assets/icon/icon.png
+          ls -la assets/icon/
+
       # Scaffold the Android project skeleton (gradle wrapper, MainActivity,
       # build.gradle, etc.). Existing Dart source is left untouched.
       - name: Scaffold Android project
         run: |
-          flutter create --project-name yajertex_dev_camera \
-                         --org com.yajertex \
+          flutter create --project-name yajatxdev_geo \
+                         --org com.yajatxdev \
                          --platforms=android \
                          .
 
       # Overlay our custom AndroidManifest.xml (adds camera + location
-      # permissions that flutter create doesn't include by default).
+      # permissions + the "YajatXDev Geo" app label).
       - name: Apply custom AndroidManifest
         run: |
           cp android-patches/AndroidManifest.xml \
              android/app/src/main/AndroidManifest.xml
 
-      # The scaffolded project pins Kotlin too low for newer plugins
-      # (e.g. camera). Bump to 1.9.22.
+      # Scaffolded Kotlin pin is too low for the camera plugin.
       - name: Bump Kotlin plugin version
         run: |
           if [ -f android/settings.gradle ]; then
@@ -53,13 +63,14 @@ jobs:
           if [ -f android/build.gradle ]; then
             sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/" android/build.gradle || true
           fi
-          echo '--- settings.gradle ---'
-          grep -i kotlin android/settings.gradle || true
-          echo '--- build.gradle ---'
-          grep -i kotlin android/build.gradle || true
 
       - name: Pub get
         run: flutter pub get
+
+      # Writes into android/app/src/main/res/mipmap-*/ic_launcher.png and
+      # the adaptive-icon XML. Must run AFTER the Android scaffold exists.
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
 
       - name: Build release APK
         run: flutter build apk --release
@@ -67,6 +78,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: yajertex-dev-camera-release
+          name: yajatxdev-geo-release
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error

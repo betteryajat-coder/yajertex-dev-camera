@@ -3,26 +3,36 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/photo_model.dart';
 import '../services/image_processor.dart';
 import '../services/storage_service.dart';
 import '../theme/app_theme.dart';
 
-/// Post-capture review: rotate, retake, or save (+ add to gallery index).
-/// Returns `true` via Navigator.pop when the photo was saved.
+/// Post-capture review.
+///
+/// Flow:
+///   - Receives the *raw* capture (no overlay yet) + lat/lng + a suggested
+///     society name from reverse geocoding.
+///   - User can edit the society name in a text field (auto-filled).
+///   - On Save: bakes any pending rotation + stamps the final overlay in one
+///     pass, writes to a fresh stamped file, indexes it, and pops true.
+///   - On Retake: deletes the raw file and pops false.
 class PreviewScreen extends StatefulWidget {
-  final String imagePath;
+  final String rawImagePath;
   final double? latitude;
   final double? longitude;
-  final String userName;
+  final String suggestedSocietyName;
+  final bool mirrorOnSave;
 
   const PreviewScreen({
     super.key,
-    required this.imagePath,
+    required this.rawImagePath,
     required this.latitude,
     required this.longitude,
-    required this.userName,
+    required this.suggestedSocietyName,
+    required this.mirrorOnSave,
   });
 
   @override
@@ -31,21 +41,33 @@ class PreviewScreen extends StatefulWidget {
 
 class _PreviewScreenState extends State<PreviewScreen> {
   final _storage = StorageService();
-  int _rotationQuarterTurns = 0; // visual only; baked in on save
-  bool _busy = false;
-  // Bump to force Image.file to reload after we rewrite the file.
-  int _imgKey = 0;
+  late final TextEditingController _societyCtrl;
 
-  Future<void> _rotate(int delta) async {
+  int _rotationQuarterTurns = 0; // visual only; baked on save
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _societyCtrl =
+        TextEditingController(text: widget.suggestedSocietyName.trim());
+  }
+
+  @override
+  void dispose() {
+    _societyCtrl.dispose();
+    super.dispose();
+  }
+
+  void _rotate(int delta) {
     if (_busy) return;
     setState(() => _rotationQuarterTurns += delta);
   }
 
   Future<void> _retake() async {
     if (_busy) return;
-    // Discard the temp capture and go back to the camera.
     try {
-      final f = File(widget.imagePath);
+      final f = File(widget.rawImagePath);
       if (await f.exists()) await f.delete();
     } catch (_) {}
     if (!mounted) return;
@@ -55,21 +77,50 @@ class _PreviewScreenState extends State<PreviewScreen> {
   Future<void> _save() async {
     if (_busy) return;
     setState(() => _busy = true);
+    FocusScope.of(context).unfocus();
 
     try {
-      // Bake any pending rotation into the file on disk.
       final quarters = ((_rotationQuarterTurns % 4) + 4) % 4;
       if (quarters != 0) {
-        await ImageProcessor.rotateInPlace(widget.imagePath, quarters * 90);
+        await ImageProcessor.rotateInPlace(
+            widget.rawImagePath, quarters * 90);
       }
 
+      final society = _societyCtrl.text.trim();
+
+      final stampedPath = p.join(
+        (await _storage.photoDirectory()).path,
+        'yajat_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      );
+
+      await ImageProcessor.stampGeoOverlay(
+        srcPath: widget.rawImagePath,
+        dstPath: stampedPath,
+        latitude: widget.latitude,
+        longitude: widget.longitude,
+        societyName: society,
+        timestamp: DateTime.now(),
+        // Rotation was already baked in above, so the file now has the
+        // correct orientation — but the front-cam mirror was NOT yet
+        // applied (we do it as part of the overlay pass so the text
+        // reads correctly).
+        mirror: widget.mirrorOnSave,
+      );
+
+      // Clean up the raw file now that the stamped copy exists.
+      try {
+        await File(widget.rawImagePath).delete();
+      } catch (_) {}
+
+      final userName = (await _storage.getUserName()) ?? '';
       final photo = PhotoModel(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
-        path: widget.imagePath,
+        path: stampedPath,
         latitude: widget.latitude,
         longitude: widget.longitude,
         timestamp: DateTime.now(),
-        userName: widget.userName,
+        userName: userName,
+        societyName: society,
       );
       await _storage.addPhoto(photo);
 
@@ -97,44 +148,64 @@ class _PreviewScreenState extends State<PreviewScreen> {
   @override
   Widget build(BuildContext context) {
     final lat = widget.latitude?.toStringAsFixed(6) ?? 'Unavailable';
-    final lon = widget.longitude?.toStringAsFixed(6) ?? 'Unavailable';
+    final lng = widget.longitude?.toStringAsFixed(6) ?? 'Unavailable';
 
     return Scaffold(
       backgroundColor: Colors.black,
+      resizeToAvoidBottomInset: true,
       body: SafeArea(
-        child: Column(
-          children: [
-            _buildTopBar(),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: Center(
-                  child: Hero(
-                    tag: 'preview-${widget.imagePath}',
-                    child: ClipRRect(
-                      borderRadius:
-                          BorderRadius.circular(AppTheme.radiusLg),
-                      child: AnimatedRotation(
-                        duration: const Duration(milliseconds: 280),
-                        curve: Curves.easeOutCubic,
-                        turns: _rotationQuarterTurns / 4,
-                        child: Image.file(
-                          File(widget.imagePath),
-                          key: ValueKey(_imgKey),
-                          fit: BoxFit.contain,
-                        ),
-                      ),
-                    ),
+        child: GestureDetector(
+          onTap: () => FocusScope.of(context).unfocus(),
+          behavior: HitTestBehavior.opaque,
+          child: Column(
+            children: [
+              _buildTopBar(),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: 4),
+                      _buildImage(),
+                      const SizedBox(height: 14),
+                      _buildSocietyField(),
+                      const SizedBox(height: 14),
+                      _buildMetaRow(lat, lng),
+                    ],
                   ),
                 ),
               ),
+              _buildActions(),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImage() {
+    return AspectRatio(
+      aspectRatio: 3 / 4,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+        child: AnimatedRotation(
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+          turns: _rotationQuarterTurns / 4,
+          child: Transform(
+            alignment: Alignment.center,
+            // Visually preview the mirror-correction that will be applied
+            // on save for front-camera captures.
+            transform: widget.mirrorOnSave
+                ? (Matrix4.identity()..scale(-1.0, 1.0, 1.0))
+                : Matrix4.identity(),
+            child: Image.file(
+              File(widget.rawImagePath),
+              fit: BoxFit.cover,
             ),
-            const SizedBox(height: 14),
-            _buildMetaRow(lat, lon),
-            const SizedBox(height: 14),
-            _buildActions(),
-            const SizedBox(height: 16),
-          ],
+          ),
         ),
       ),
     );
@@ -189,34 +260,91 @@ class _PreviewScreenState extends State<PreviewScreen> {
     );
   }
 
-  Widget _buildMetaRow(String lat, String lon) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-          border: Border.all(color: Colors.white.withOpacity(0.15)),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: _miniStat('Latitude', lat),
+  Widget _buildSocietyField() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(color: Colors.white.withOpacity(0.18)),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.apartment_rounded,
+                  color: AppTheme.primary, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                'Society / Area',
+                style: GoogleFonts.inter(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.4,
+                ),
+              ),
+              const Spacer(),
+              if (widget.suggestedSocietyName.isNotEmpty)
+                Text(
+                  'auto-filled',
+                  style: GoogleFonts.inter(
+                    color: Colors.white38,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+            ],
+          ),
+          TextField(
+            controller: _societyCtrl,
+            textCapitalization: TextCapitalization.words,
+            style: GoogleFonts.inter(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
             ),
-            Container(
-              width: 1,
-              height: 32,
-              color: Colors.white.withOpacity(0.15),
+            cursorColor: AppTheme.primary,
+            decoration: InputDecoration(
+              hintText: 'Enter a name (e.g. Green Valley Society)',
+              hintStyle: GoogleFonts.inter(
+                color: Colors.white38,
+                fontSize: 14,
+              ),
+              isDense: true,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(vertical: 8),
             ),
-            Expanded(
-              child: _miniStat('Longitude', lon),
-            ),
-          ],
-        ),
-      ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.2, end: 0),
-    );
+          ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 280.ms).slideY(begin: 0.2, end: 0);
+  }
+
+  Widget _buildMetaRow(String lat, String lng) {
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(color: Colors.white.withOpacity(0.15)),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _miniStat('Latitude', lat)),
+          Container(
+            width: 1,
+            height: 32,
+            color: Colors.white.withOpacity(0.15),
+          ),
+          Expanded(child: _miniStat('Longitude', lng)),
+        ],
+      ),
+    ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.2, end: 0);
   }
 
   Widget _miniStat(String label, String value) {
@@ -249,7 +377,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
 
   Widget _buildActions() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 18),
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 0),
       child: Row(
         children: [
           Expanded(

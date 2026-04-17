@@ -1,89 +1,91 @@
-# YajerTex Dev Camera
+# YajatXDev Geo
 
-A premium Flutter camera app that captures photos with a **GPS coordinate overlay** burned into every image. Light-blue / white theme, glassmorphism accents, smooth micro-animations.
+A premium Flutter camera app that stamps a clean geo-tag badge into every photo. Light-blue / white theme, glassmorphism accents, smooth micro-animations.
 
-## Feature checklist
+## Overlay format (bottom-left of each image)
 
-| Area | Delivered |
-|------|-----------|
-| Splash screen | Animated logo + brand title, 2.4 s auto-route |
-| Name input | Validated field, persisted with `shared_preferences` |
-| Dashboard | Grid of captures, per-photo date/time, geo-indicator, FAB |
-| Camera | Live preview, **front-first default**, front/back toggle |
-| Capture | Shutter animation + haptic flash, async GPS fetch |
-| Overlay | Lat/lon/timestamp/name stamped bottom-left on every photo |
-| Preview | Rotate L/R, Retake, Save |
-| Storage | Bytes in app documents dir, metadata in `SharedPreferences` |
-| Permissions | Camera + location requested + settings deep-link on denial |
-| Error states | GPS off, camera unavailable, permission denied |
+```
+Green Valley Society          ← society / area name (editable)
+Lat: 23.022500
+Lng: 72.571400
+17 Apr 2026, 5:42 PM
+```
+
+No app name. No user name. Just the four things you actually want on the photo.
+
+## Feature highlights
+
+- **Splash → name input → dashboard → camera → preview** navigation with animated transitions
+- **Front-first camera** with a robust flip implementation (dispose-then-init pattern, no black-screen bug)
+- **Reverse-geocoded society name** pre-filled on the preview screen; user can edit before saving
+- **Per-photo metadata**: latitude, longitude, timestamp, society, user name (stored locally via `shared_preferences`)
+- **GPS off / camera denied / location denied** all produce clear, actionable error states
+- **Custom launcher icon + app label** — shows up as "YajatXDev Geo" on the home screen
 
 ## Folder layout
 
 ```
+assets/icon/icon.svg                 brand mark (rasterized to PNG on CI)
 lib/
-├── main.dart                       app entry + theme wiring
-├── theme/app_theme.dart            palette, gradients, ThemeData
-├── models/photo_model.dart         serialisable photo metadata
+├── main.dart                        app entry + theme
+├── theme/app_theme.dart             palette, gradients, ThemeData
+├── models/photo_model.dart          serialisable photo metadata (incl. societyName)
 ├── services/
-│   ├── storage_service.dart        user name + photo index + paths
-│   ├── location_service.dart       GPS with typed error results
-│   ├── permissions_service.dart    runtime permission requests
-│   └── image_processor.dart        GPS overlay stamp + rotate-in-place
+│   ├── storage_service.dart         user name + photo index + paths
+│   ├── location_service.dart        GPS + reverse geocoding
+│   ├── permissions_service.dart     runtime permission requests
+│   └── image_processor.dart         overlay stamp + rotate-in-place
 ├── widgets/
-│   ├── app_logo.dart               aperture-style brand mark
-│   ├── primary_button.dart         gradient CTA w/ loading state
-│   └── glass_card.dart             frosted-glass container
+│   ├── app_logo.dart                SVG-backed brand mark
+│   ├── primary_button.dart          gradient CTA w/ loading state
+│   └── glass_card.dart              frosted container
 └── screens/
     ├── splash_screen.dart
     ├── name_input_screen.dart
     ├── dashboard_screen.dart
     ├── camera_screen.dart
-    ├── preview_screen.dart
+    ├── preview_screen.dart          editable society-name field lives here
     └── photo_detail_screen.dart
+android-patches/                     Android overlays applied after `flutter create` on CI
+.github/workflows/build-apk.yml      cloud build → downloadable APK artifact
 ```
 
-## Run it
+## Run locally
 
-Prereqs: Flutter **3.19+**, a physical Android/iOS device (camera + GPS are not reliable on emulators).
+Prereqs: Flutter **3.22**, a physical Android/iOS device (camera + GPS are unreliable on emulators).
 
 ```bash
-# 1. Fetch packages
 flutter pub get
-
-# 2. Run on a connected device
+dart run flutter_launcher_icons   # optional: regenerates app icon
 flutter run
 ```
 
-### Android notes
-- Min SDK 24, target SDK 34.
-- Permissions are declared in `android/app/src/main/AndroidManifest.xml`:
-  `CAMERA`, `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, media read/write.
+### Android permissions
+Declared in `android-patches/AndroidManifest.xml` (applied to the scaffolded `android/` on CI):
+`CAMERA`, `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, media read/write.
 
-### iOS notes
-- `ios/Runner/Info.plist` declares:
-  `NSCameraUsageDescription`, `NSLocationWhenInUseUsageDescription`, `NSPhotoLibraryAddUsageDescription`, `NSMicrophoneUsageDescription`.
-- Run `cd ios && pod install` after `flutter pub get` the first time.
+## Cloud build (recommended)
 
-## How the GPS overlay works
+Every push to `main` runs `.github/workflows/build-apk.yml`:
 
-`ImageProcessor.stampGeoOverlay` (in [lib/services/image_processor.dart](lib/services/image_processor.dart)) decodes the JPEG returned by the camera plugin, draws a translucent panel with a blue accent bar in the bottom-left, and writes four lines:
+1. Rasterizes `assets/icon/icon.svg` to a 1024×1024 PNG (rsvg-convert).
+2. Scaffolds `android/` via `flutter create`.
+3. Overlays the custom `AndroidManifest.xml`.
+4. Bumps Kotlin to 1.9.22 (plugin compatibility).
+5. `flutter_launcher_icons` generates the mipmap assets.
+6. `flutter build apk --release` builds the APK.
+7. Uploads as the `yajatxdev-geo-release` artifact.
 
-1. `YajerTex Dev Camera`
-2. `Lat: <6-decimal>`
-3. `Lon: <6-decimal>`
-4. `YYYY-MM-DD HH:mm  •  <user name>`
+Download the APK from the Actions tab → latest successful run → artifact → unzip → install.
 
-Text is rendered with a 1-pixel shadow for legibility on any background. Front-camera frames are automatically un-mirrored before the overlay is applied.
+## Camera flip — how the bug is avoided
 
-## Error handling
+The canonical failure mode on Android is: new controller is built and `_controller = newController` happens **before** the old one is fully released, so `CameraPreview` can paint a disposed controller mid-swap. [camera_screen.dart](lib/screens/camera_screen.dart) uses a dispose-first pattern:
 
-- **GPS off** → capture still succeeds; a snackbar tells the user, and the overlay reads `Lat: —` / `Lon: —`.
-- **Camera permission denied** → full-screen error with *Retry* and *Open Settings* actions.
-- **Location permission permanently denied** → snackbar points to system settings.
-- **Broken image files** on disk are auto-evicted from the gallery index on next load.
+1. `setState(() { _controller = null; _initializing = true; })` — UI drops the preview.
+2. `await old.dispose()` — wait for the platform to release.
+3. `await Future.delayed(180ms)` — camera HAL breathing room.
+4. Build the new `CameraController`, `initialize()`, `setFlashMode()`.
+5. `setState(() { _controller = newController; _initializing = false; })` — swap in.
 
-## Quality pass checklist
-
-- `flutter analyze` — 0 issues expected.
-- Manual: splash → name → dashboard → camera → capture → preview → save → dashboard shows the new photo at the top.
-- Verify the overlay is visible and correctly oriented for both front and back captures.
+The flip also prefers front↔back toggling rather than round-robin indexing, so devices with 3+ sensors still behave predictably.

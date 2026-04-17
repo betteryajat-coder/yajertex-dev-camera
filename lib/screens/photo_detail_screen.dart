@@ -108,7 +108,9 @@ class _PhotoDetailScreenState extends State<PhotoDetailScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    p.userName.isEmpty ? 'Untitled capture' : p.userName,
+                    p.societyName.isEmpty
+                        ? 'Untitled capture'
+                        : p.societyName,
                     style: GoogleFonts.inter(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,

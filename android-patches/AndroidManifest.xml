@@ -12,7 +12,7 @@
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
     <application
-        android:label="YajerTex Dev Camera"
+        android:label="YajatXDev Geo"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">
